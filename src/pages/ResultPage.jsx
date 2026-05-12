@@ -406,12 +406,28 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
       : '–'
   );
 
+  // 이동수단별 바 색상 — 대중교통은 호선 공식색, 자동차/도보는 고유색
+  const modeBarColor = (() => {
+    if (mode === 'car') return '#7EB8F7';
+    if (mode === 'walk') return '#4CAF50';
+    return midpoint?.subwayRoute
+      ? (LINE_INFO[midpoint.subwayRoute.lineNumber]?.color ?? '#F08472')
+      : '#F08472';
+  })();
+
+  // 분(숫자) 기준 소요시간 → 가장 긴 여정을 100%로 맞춰 비율 계산
+  const speeds = { transit: 10, car: 22, walk: 4.5 };
+  const travelMinsArr = departurePoints.map(dep =>
+    dep.lat && midpoint?.lat
+      ? (calcDistance(dep.lat, dep.lng, midpoint.lat, midpoint.lng) / speeds[mode]) * 60
+      : 0
+  );
+  const maxMins = Math.max(...travelMinsArr, 1);
+
   const filteredPlaces = places.filter(p => {
     if (filter === '전체') return true;
     return p.categoryCode === CATEGORY_MAP[filter];
   });
-
-  const progressColors = ['#4CAF50', '#F44336', '#7EB8F7', '#F5C842', '#AB47BC'];
 
   return (
     <div className="w-full h-full flex flex-col bg-white overflow-y-auto">
@@ -479,10 +495,8 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{
-                      width: dep.lat && midpoint?.lat
-                        ? `${Math.min(100, (calcDistance(dep.lat, dep.lng, midpoint.lat, midpoint.lng) / 50) * 100)}%`
-                        : '60%',
-                      backgroundColor: progressColors[i % progressColors.length],
+                      width: `${Math.max(6, (travelMinsArr[i] / maxMins) * 100)}%`,
+                      backgroundColor: modeBarColor,
                     }}
                   />
                 </div>
