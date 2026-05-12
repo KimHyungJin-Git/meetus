@@ -22,19 +22,27 @@ const LINE2_SAMSUNG_KONKUK = [
   { name: '건대입구역',  lat: 37.540309, lng: 127.069510 },
 ];
 
+import { selectFairestPoint } from './midpoint.js';
+
 // Returns a subway route object if the given points match a known demo route
 export function detectSubwayRoute(points) {
   const labels = points.map(p => p.label);
   if (labels.includes('삼성역') && labels.includes('건대입구역')) {
     const stations = LINE2_SAMSUNG_KONKUK;
-    const meetingIdx = Math.floor(stations.length / 2); // 4 → 잠실나루역
+    const origins = points.filter(p => p.lat && p.lng);
+
+    // 출발지들에서 각 중간역까지의 거리 편차가 가장 작은 역 선택
+    const candidates = stations.slice(1, stations.length - 1); // 양 끝 출발지 제외
+    const fairest = selectFairestPoint(candidates, origins);
+    const meetingIdx = stations.findIndex(s => s.name === fairest.name);
+
     return {
       lineNumber: 2,
       stations,
       meetingStationIdx: meetingIdx,
       meetingStation: stations[meetingIdx],
-      routeA: stations.slice(0, meetingIdx + 1),           // 삼성 → 잠실나루
-      routeB: [...stations.slice(meetingIdx)].reverse(),   // 건대입구 → 잠실나루
+      routeA: stations.slice(0, meetingIdx + 1),
+      routeB: [...stations.slice(meetingIdx)].reverse(),
     };
   }
   return null;
