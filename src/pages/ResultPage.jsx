@@ -3,6 +3,7 @@ import BottomNav from '../components/BottomNav';
 import useKakaoLoader from '../hooks/useKakaoLoader';
 import { searchByCategory } from '../services/kakaoApi';
 import { calcDistance, estimateTravelTime } from '../services/midpoint';
+import { LINE_INFO } from '../services/subwayData';
 
 // ── 아이콘 ──────────────────────────────────────────────────
 function ShareIcon() {
@@ -55,9 +56,14 @@ function MockMapSVG({ departurePoints, midpoint, mode }) {
   const W = 390, H = 200;
   const validDeps = departurePoints.filter(p => p.lat && p.lng);
   const hasMid = midpoint?.lat && midpoint?.lng;
+  const subwayRoute = mode === 'transit' ? midpoint?.subwayRoute : null;
+  const lineColor = subwayRoute
+    ? (LINE_INFO[subwayRoute.lineNumber]?.color ?? ROUTE_COLOR.transit)
+    : ROUTE_COLOR[mode];
 
-  // 바운딩 박스 계산
-  const allPts = [...validDeps, ...(hasMid ? [midpoint] : [])];
+  // Include subway station waypoints in the bounding box so the full route is visible
+  const stationPts = subwayRoute ? subwayRoute.stations : [];
+  const allPts = [...validDeps, ...(hasMid ? [midpoint] : []), ...stationPts];
   if (allPts.length === 0) return <rect width={W} height={H} fill="#F0EDE8" />;
 
   const lats = allPts.map(p => p.lat);
@@ -76,18 +82,27 @@ function MockMapSVG({ departurePoints, midpoint, mode }) {
     y: ((maxLat - lat) / (maxLat - minLat)) * H,
   });
 
-  // 자연스러운 곡선 경로 (수직 방향으로 살짝 오프셋)
   const curvePath = (p1, p2) => {
     const cx = (p1.x + p2.x) / 2 - (p2.y - p1.y) * 0.25;
     const cy = (p1.y + p2.y) / 2 + (p2.x - p1.x) * 0.25;
     return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
   };
 
+  const polylinePath = (stations) =>
+    stations.map(s => toXY(s.lat, s.lng))
+      .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`)
+      .join(' ');
+
   const midXY = hasMid ? toXY(midpoint.lat, midpoint.lng) : null;
 
-  // 한강 표시 여부
   const hanY = ((maxLat - HAN_RIVER_LAT) / (maxLat - minLat)) * H;
   const showHan = hanY > 15 && hanY < H - 15;
+
+  // Badge placed at the midpoint of routeA
+  const badgeStation = subwayRoute
+    ? subwayRoute.routeA[Math.floor(subwayRoute.routeA.length / 2)]
+    : null;
+  const badgeXY = badgeStation ? toXY(badgeStation.lat, badgeStation.lng) : null;
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
@@ -106,22 +121,64 @@ function MockMapSVG({ departurePoints, midpoint, mode }) {
           <text x={8} y={hanY + 3} fill="#7AADCE" fontSize="8" fontWeight="600" opacity={0.8}>한강</text>
         </>
       )}
+
       {/* 경로 */}
-      {midXY && validDeps.map((dep, i) => {
-        const depXY = toXY(dep.lat, dep.lng);
-        return (
-          <path
-            key={dep.id ?? i}
-            d={curvePath(depXY, midXY)}
-            stroke={ROUTE_COLOR[mode]}
-            strokeWidth="3.5"
-            strokeLinecap="round"
-            strokeDasharray={ROUTE_DASH[mode]}
-            fill="none"
-            opacity={0.85}
-          />
-        );
-      })}
+      {subwayRoute ? (
+        <>
+          {/* 호선 폴리라인 */}
+          <path d={polylinePath(subwayRoute.routeA)} stroke={lineColor} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.92} />
+          <path d={polylinePath(subwayRoute.routeB)} stroke={lineColor} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity={0.92} />
+
+          {/* 호선 뱃지 */}
+          {badgeXY && (
+            <g>
+              <rect x={badgeXY.x - 18} y={badgeXY.y - 27} width={36} height={15} rx={7} fill={lineColor} />
+              <text x={badgeXY.x} y={badgeXY.y - 16} textAnchor="middle" fill="white" fontSize="8" fontWeight="800">
+                {LINE_INFO[subwayRoute.lineNumber]?.name}
+              </text>
+            </g>
+          )}
+
+          {/* 역 도트 + 이름 */}
+          {subwayRoute.stations.map((station, i) => {
+            const { x, y } = toXY(station.lat, station.lng);
+            const isMeeting = i === subwayRoute.meetingStationIdx;
+            const isEndpoint = i === 0 || i === subwayRoute.stations.length - 1;
+            return (
+              <g key={station.name}>
+                <circle cx={x} cy={y} r={isMeeting ? 6 : 3.5}
+                  fill="white" stroke={lineColor}
+                  strokeWidth={isMeeting ? 2.5 : 1.8} />
+                {!isEndpoint && (
+                  <text x={x} y={y - 8} textAnchor="middle"
+                    fill={isMeeting ? '#222' : '#555'}
+                    fontSize={isMeeting ? '8' : '6.5'}
+                    fontWeight={isMeeting ? '700' : '500'}>
+                    {station.name.replace('역', '')}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </>
+      ) : (
+        midXY && validDeps.map((dep, i) => {
+          const depXY = toXY(dep.lat, dep.lng);
+          return (
+            <path
+              key={dep.id ?? i}
+              d={curvePath(depXY, midXY)}
+              stroke={ROUTE_COLOR[mode]}
+              strokeWidth="3.5"
+              strokeLinecap="round"
+              strokeDasharray={ROUTE_DASH[mode]}
+              fill="none"
+              opacity={0.85}
+            />
+          );
+        })
+      )}
+
       {/* 출발지 핀 */}
       {validDeps.map((dep, i) => {
         const { x, y } = toXY(dep.lat, dep.lng);
@@ -129,7 +186,6 @@ function MockMapSVG({ departurePoints, midpoint, mode }) {
           <g key={dep.id ?? i}>
             <circle cx={x} cy={y} r={11} fill={DEP_COLORS[i % DEP_COLORS.length]} />
             <circle cx={x} cy={y} r={4.5} fill="white" />
-            {/* 라벨 */}
             <rect x={x - 26} y={y - 26} width={52} height={16} rx={8} fill={DEP_COLORS[i % DEP_COLORS.length]} />
             <text x={x} y={y - 14} textAnchor="middle" fill="white" fontSize="8" fontWeight="700">
               {dep.isMyLocation ? '내 위치' : dep.label || `출발지 ${i + 1}`}
@@ -137,12 +193,13 @@ function MockMapSVG({ departurePoints, midpoint, mode }) {
           </g>
         );
       })}
+
       {/* 중간지점 핀 */}
       {midXY && (
         <g>
-          <rect x={midXY.x - 52} y={midXY.y - 28} width={104} height={20} rx={10} fill="white" opacity={0.96} />
-          <text x={midXY.x} y={midXY.y - 14} textAnchor="middle" fill="#444" fontSize="9" fontWeight="700">
-            우리들의 중간지점
+          <rect x={midXY.x - 52} y={midXY.y + 12} width={104} height={20} rx={10} fill="white" opacity={0.96} />
+          <text x={midXY.x} y={midXY.y + 25} textAnchor="middle" fill="#444" fontSize="9" fontWeight="700">
+            {subwayRoute ? subwayRoute.meetingStation.name : '우리들의 중간지점'}
           </text>
           <circle cx={midXY.x} cy={midXY.y} r={9} fill="#F5C842" />
           <circle cx={midXY.x} cy={midXY.y} r={3.5} fill="white" />

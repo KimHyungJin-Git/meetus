@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import BottomNav from '../components/BottomNav';
 import { reverseGeocode, searchKeyword } from '../services/kakaoApi';
 import { calcAverageMidpoint } from '../services/midpoint';
+import { detectSubwayRoute } from '../services/subwayData';
 import useKakaoLoader from '../hooks/useKakaoLoader';
 
 const MAX_POINTS = 5;
@@ -207,9 +208,17 @@ export default function MainPage({ onCalculate }) {
     if (filled.length < 2) return;
     setCalculating(true);
     setTimeout(() => {
-      const mid = calcAverageMidpoint(filled);
+      const subwayRoute = detectSubwayRoute(filled);
+      const mid = subwayRoute
+        ? {
+            lat: subwayRoute.meetingStation.lat,
+            lng: subwayRoute.meetingStation.lng,
+            address: subwayRoute.meetingStation.name,
+            subwayRoute,
+          }
+        : (calcAverageMidpoint(filled) ?? { lat: 37.5665, lng: 126.978, address: '서울 시청 인근' });
       setCalculating(false);
-      onCalculate(filled, mid ?? { lat: 37.5665, lng: 126.978, address: '서울 시청 인근' });
+      onCalculate(filled, mid);
     }, 2200);
   };
 
