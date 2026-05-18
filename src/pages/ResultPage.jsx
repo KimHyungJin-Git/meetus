@@ -404,6 +404,7 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
   const kakaoMapRef = useRef(null);
   const polylinesRef = useRef([]);
   const overlaysRef = useRef([]);
+  const distanceOverlaysRef = useRef([]);
 
   const [mode, setMode] = useState('transit');
   const [filter, setFilter] = useState('전체');
@@ -519,11 +520,13 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
     }
   };
 
-  // 폴리라인 그리기 — routeCoordsList: 출발지별 [[lat,lng], ...] 배열
-  const drawRoutes = useCallback((map, deps, mid, transportMode, routeCoordsList = []) => {
+  // 폴리라인 그리기 — routeCoordsList: 출발지별 [[lat,lng], ...] 배열, statsList: 출발지별 { distance_km, duration_mins }
+  const drawRoutes = useCallback((map, deps, mid, transportMode, routeCoordsList = [], statsList = []) => {
     const { kakao } = window;
     polylinesRef.current.forEach(p => p.setMap(null));
     polylinesRef.current = [];
+    distanceOverlaysRef.current.forEach(o => o.setMap(null));
+    distanceOverlaysRef.current = [];
 
     const style = MODE_STYLE[transportMode];
     deps.forEach((dep, i) => {
@@ -532,8 +535,20 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
       const path = coords?.length > 1
         ? coords.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng))
         : [new kakao.maps.LatLng(dep.lat, dep.lng), new kakao.maps.LatLng(mid.lat, mid.lng)];
-      const polyline = new kakao.maps.Polyline({ map, path, ...style });
+      const routeColor = DEPARTURE_COLORS[i] ?? style.strokeColor;
+      const polyline = new kakao.maps.Polyline({ map, path, ...style, strokeColor: routeColor });
       polylinesRef.current.push(polyline);
+
+      // 경로 중간에 거리·시간 레이블
+      const stats = statsList[i];
+      if (stats?.distance_km != null && path.length > 0) {
+        const midPos = path[Math.floor(path.length / 2)];
+        const mins = stats.duration_mins != null ? Math.round(stats.duration_mins) : null;
+        const labelText = `${stats.distance_km.toFixed(1)}km${mins != null ? ` · ${mins}분` : ''}`;
+        const content = `<div style="background:white;border:1.5px solid ${routeColor};border-radius:8px;padding:2px 8px;font-size:10px;font-weight:700;color:#333;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.18)">${labelText}</div>`;
+        const distOverlay = new kakao.maps.CustomOverlay({ map, position: midPos, content, yAnchor: 1.5 });
+        distanceOverlaysRef.current.push(distOverlay);
+      }
     });
   }, []);
 
@@ -593,7 +608,7 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
       const statsList  = results.map(r => ({ duration_mins: r.duration_mins, distance_km: r.distance_km }));
       setRouteCoords(coordsList);
       setRouteStats(statsList);
-      drawRoutes(map, validDeps, currentMidpoint, mode, coordsList);
+      drawRoutes(map, validDeps, currentMidpoint, mode, coordsList, statsList);
     });
   }, [sdkLoaded, currentMidpoint]);
 
@@ -602,7 +617,7 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
     if (!kakaoMapRef.current || !currentMidpoint) return;
     const validDeps = departurePoints.filter(p => p.lat && p.lng);
     if (routeCoords.length > 0) {
-      drawRoutes(kakaoMapRef.current, validDeps, currentMidpoint, mode, routeCoords);
+      drawRoutes(kakaoMapRef.current, validDeps, currentMidpoint, mode, routeCoords, routeStats);
     } else {
       drawRoutes(kakaoMapRef.current, validDeps, currentMidpoint, mode);
     }
@@ -671,16 +686,11 @@ export default function ResultPage({ departurePoints, midpoint, initialApiResult
   return (
     <div className="w-full h-full flex flex-col bg-white overflow-y-auto">
       {/* 지도 영역 */}
-      <div className="flex-shrink-0 relative overflow-hidden" style={{ height: 200 }}>
+      <div className="flex-shrink-0 relative overflow-hidden" style={{ height: 240 }}>
         {sdkLoaded && currentMidpoint?.lat ? (
           <div ref={mapContainerRef} className="w-full h-full" />
         ) : (
-          <>
-            <MockMapSVG departurePoints={departurePoints} midpoint={currentMidpoint} mode={mode} />
-            <div className="absolute bottom-2 right-2 bg-black/40 text-white text-[9px] px-2 py-1 rounded-full">
-              카카오 키 설정 시 실제 지도로 전환
-            </div>
-          </>
+          <MockMapSVG departurePoints={departurePoints} midpoint={currentMidpoint} mode={mode} />
         )}
       </div>
 
