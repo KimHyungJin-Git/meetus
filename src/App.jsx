@@ -7,6 +7,7 @@ export default function App() {
   const [screen, setScreen] = useState('splash');
   const [departurePoints, setDeparturePoints] = useState([]);
   const [midpoint, setMidpoint] = useState(null);
+  const [apiResult, setApiResult] = useState(null);
 
   useEffect(() => {
     if (screen === 'splash') {
@@ -15,9 +16,10 @@ export default function App() {
     }
   }, [screen]);
 
-  const handleCalculate = (points, mid) => {
+  const handleCalculate = (points, mid, result = null) => {
     setDeparturePoints(points);
     setMidpoint(mid);
+    setApiResult(result);
     setScreen('result');
   };
 
@@ -34,6 +36,7 @@ export default function App() {
             <ResultPage
               departurePoints={departurePoints}
               midpoint={midpoint}
+              initialApiResult={apiResult}
               onBack={() => setScreen('main')}
             />
           )}

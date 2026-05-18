@@ -4,6 +4,7 @@ import useKakaoLoader from '../hooks/useKakaoLoader';
 import { searchByCategory } from '../services/kakaoApi';
 import { calcDistance, estimateTravelTime } from '../services/midpoint';
 import { LINE_INFO } from '../services/subwayData';
+import { calculateMidpoint, fetchRoute } from '../services/meetusApi';
 
 // ── 아이콘 ──────────────────────────────────────────────────
 function ShareIcon() {
@@ -253,6 +254,133 @@ const TRANSPORT_MODES = [
   )},
 ];
 
+// ── 경로 상세 바텀시트 ────────────────────────────────────────
+const MODE_LABEL = { transit: '대중교통', driving: '자동차', walking: '도보' };
+const MODE_COLOR = { transit: '#F08472', driving: '#7EB8F7', walking: '#4CAF50' };
+const BY_CODE   = { transit: 'PUBLICTRANSIT', driving: 'CAR', walking: 'FOOT' };
+
+function RouteStep({ color, icon, label, sub }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex flex-col items-center">
+        <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+             style={{ backgroundColor: `${color}20` }}>
+          {icon}
+        </div>
+      </div>
+      <div className="pt-1.5">
+        <p className="text-sm font-semibold text-gray-900">{label}</p>
+        {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function RouteLine({ color, label }) {
+  return (
+    <div className="flex items-start gap-3 py-1">
+      <div className="flex flex-col items-center w-9">
+        <div className="w-0.5 h-4" style={{ backgroundColor: `${color}60` }} />
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full mt-0.5"
+              style={{ backgroundColor: `${color}18`, color }}>
+          {label}
+        </span>
+        <div className="w-0.5 h-4" style={{ backgroundColor: `${color}60` }} />
+      </div>
+    </div>
+  );
+}
+
+function RouteDetailSheet({ dep, midpoint, mode, travelTime, distanceKm, onClose }) {
+  const color = MODE_COLOR[mode];
+  const modeLabel = MODE_LABEL[mode];
+  const destName = midpoint?.snapped_station
+    ? `${midpoint.snapped_station}역`
+    : midpoint?.address || '중간지점';
+
+  const kakaoMapUrl = dep?.lat && midpoint?.lat
+    ? `https://map.kakao.com/link/from/${encodeURIComponent(dep.label)},${dep.lat},${dep.lng}/to/${encodeURIComponent(destName)},${midpoint.lat},${midpoint.lng}`
+    : null;
+
+  const steps = [];
+
+  // 출발지
+  steps.push({ type: 'point', label: dep?.label || '출발지', sub: dep?.isMyLocation ? '내 위치' : null });
+
+  // 대중교통: 출발 → 지하철역 → 중간지점
+  if (mode === 'transit' && midpoint?.snapped_station) {
+    steps.push({ type: 'line', label: modeLabel });
+    steps.push({ type: 'point', label: `${midpoint.snapped_station}역`, sub: '지하철 환승 포인트' });
+    steps.push({ type: 'line', label: '도보' });
+  } else {
+    steps.push({ type: 'line', label: modeLabel });
+  }
+
+  // 중간지점
+  steps.push({ type: 'point', label: destName, sub: midpoint?.address || null });
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-end">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full bg-white rounded-t-3xl px-6 pt-5 pb-10 shadow-2xl">
+        <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
+
+        {/* 헤더 */}
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">경로 상세</p>
+            <p className="text-base font-bold text-gray-900 mt-0.5">{travelTime} 예상</p>
+          </div>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+               style={{ backgroundColor: `${color}18` }}>
+            <span className="text-xs font-bold" style={{ color }}>{modeLabel}</span>
+            <span className="text-xs text-gray-400">· {distanceKm.toFixed(1)}km</span>
+          </div>
+        </div>
+
+        {/* 경로 스텝 */}
+        <div className="space-y-0">
+          {steps.map((step, i) =>
+            step.type === 'point' ? (
+              <RouteStep
+                key={i}
+                color={step.label.includes('역') ? color : (i === 0 ? '#EF7878' : '#F5C842')}
+                icon={
+                  i === 0
+                    ? <svg width="16" height="16" viewBox="0 0 24 24" fill={color}><circle cx="12" cy="10" r="4"/><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#EF7878"/></svg>
+                    : step.label.includes('역')
+                      ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="12" rx="3" fill={color} opacity=".9"/><circle cx="7.5" cy="18" r="1.5" fill={color}/><circle cx="16.5" cy="18" r="1.5" fill={color}/><line x1="3" y1="11" x2="21" y2="11" stroke="white" strokeWidth="1.5"/></svg>
+                      : <svg width="16" height="16" viewBox="0 0 24 24" fill="#F5C842"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="3" fill="white"/></svg>
+                }
+                label={step.label}
+                sub={step.sub}
+              />
+            ) : (
+              <RouteLine key={i} color={color} label={step.label} />
+            )
+          )}
+        </div>
+
+        {/* 카카오맵 길찾기 버튼 */}
+        {kakaoMapUrl && (
+          <a
+            href={kakaoMapUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-6 flex items-center justify-center gap-2 w-full py-3.5 rounded-2xl font-semibold text-sm text-white"
+            style={{ backgroundColor: color }}
+          >
+            카카오맵에서 길찾기
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M5 12h14M13 6l6 6-6 6" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── 지도 핀 SVG (카카오 CustomOverlay용 HTML 문자열) ──────────
 function departurePinHTML(color, label) {
   return `
@@ -270,7 +398,7 @@ function midpointPinHTML(address) {
 }
 
 // ── ResultPage ────────────────────────────────────────────────
-export default function ResultPage({ departurePoints, midpoint, onBack }) {
+export default function ResultPage({ departurePoints, midpoint, initialApiResult, onBack }) {
   const { loaded: sdkLoaded } = useKakaoLoader();
   const mapContainerRef = useRef(null);
   const kakaoMapRef = useRef(null);
@@ -284,8 +412,92 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
     try { return JSON.parse(localStorage.getItem('meetus_liked') || '{}'); }
     catch { return {}; }
   });
+  const [currentMidpoint, setCurrentMidpoint] = useState(midpoint);
   const [midAddress, setMidAddress] = useState(midpoint?.address || '');
   const [loadingPlaces, setLoadingPlaces] = useState(false);
+  const [summary, setSummary] = useState(initialApiResult?.summary ?? null);
+  const [walkingPopup, setWalkingPopup] = useState(false);
+  const [apiLoading, setApiLoading] = useState(false);
+  const [routeSheet, setRouteSheet] = useState(null);
+  const [routeCoords, setRouteCoords] = useState([]);
+  const [routeStats, setRouteStats] = useState([]); // 출발지별 { duration_mins, distance_km }
+
+  // 초기 API 추천 장소 적용
+  useEffect(() => {
+    if (!initialApiResult?.recommended_places?.length) return;
+    const normalized = initialApiResult.recommended_places.map((p, i) => ({
+      id: p.place_name + i,
+      name: p.place_name,
+      address: p.address_name,
+      distance: parseInt(p.distance_meters, 10) || 0,
+      url: p.place_url,
+      categoryCode: 'CE7',
+      stars: 4,
+    }));
+    setPlaces(normalized);
+  }, [initialApiResult]);
+
+  // 이동수단 변경 — API 재호출
+  const handleModeChange = async (newMode) => {
+    setMode(newMode);
+    const withCoords = departurePoints.filter(p => p.lat && p.lng);
+    const [pointA, pointB] = withCoords;
+    if (!pointA || !pointB) return;
+
+    setApiLoading(true);
+    try {
+      const result = await calculateMidpoint({
+        startLat: pointA.lat,
+        startLon: pointA.lng,
+        endLat: pointB.lat,
+        endLon: pointB.lng,
+        mode: newMode,
+        category: filter === '카페' ? 'CE7' : 'FD6',
+      });
+
+      if (result.status === 'filtered') {
+        setWalkingPopup(true);
+        setMode('transit');
+        return;
+      }
+      if (result.status === 'success') {
+        const mid = {
+          lat: result.midpoint_geo.lat,
+          lng: result.midpoint_geo.lng,
+          address: result.midpoint_geo.address,
+          snapped_station: result.midpoint_geo.snapped_station,
+        };
+        setCurrentMidpoint(mid);
+        setMidAddress(result.midpoint_geo.address || '');
+        setSummary(result.summary);
+        if (result.recommended_places?.length) {
+          setPlaces(result.recommended_places.map((p, i) => ({
+            id: p.place_name + i,
+            name: p.place_name,
+            address: p.address_name,
+            distance: parseInt(p.distance_meters, 10) || 0,
+            url: p.place_url,
+            categoryCode: 'CE7',
+            stars: 4,
+          })));
+        }
+        // 새 중간지점 기준 경로 재fetch
+        const validDeps = departurePoints.filter(p => p.lat && p.lng);
+        const results = await Promise.all(
+          validDeps.map(dep =>
+            fetchRoute({ startLat: dep.lat, startLon: dep.lng, endLat: mid.lat, endLon: mid.lng, mode: newMode })
+              .catch(() => ({ coordinates: [], duration_mins: null, distance_km: null }))
+          )
+        );
+        setRouteCoords(results.map(r => r.coordinates ?? r));
+        setRouteStats(results.map(r => ({ duration_mins: r.duration_mins, distance_km: r.distance_km })));
+      }
+    } catch {
+      // API 미연결 시 기존 동작 유지
+    } finally {
+      setApiLoading(false);
+    }
+  };
 
   // 하트 토글
   const toggleLike = (id) => {
@@ -307,20 +519,19 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
     }
   };
 
-  // 폴리라인 그리기 (이동수단별)
-  const drawRoutes = useCallback((map, deps, mid, transportMode) => {
+  // 폴리라인 그리기 — routeCoordsList: 출발지별 [[lat,lng], ...] 배열
+  const drawRoutes = useCallback((map, deps, mid, transportMode, routeCoordsList = []) => {
     const { kakao } = window;
     polylinesRef.current.forEach(p => p.setMap(null));
     polylinesRef.current = [];
 
     const style = MODE_STYLE[transportMode];
-    deps.forEach(dep => {
+    deps.forEach((dep, i) => {
       if (!dep.lat || !dep.lng || !mid?.lat) return;
-      // 직선 경로 (백엔드 연동 전 fallback)
-      const path = [
-        new kakao.maps.LatLng(dep.lat, dep.lng),
-        new kakao.maps.LatLng(mid.lat, mid.lng),
-      ];
+      const coords = routeCoordsList[i];
+      const path = coords?.length > 1
+        ? coords.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng))
+        : [new kakao.maps.LatLng(dep.lat, dep.lng), new kakao.maps.LatLng(mid.lat, mid.lng)];
       const polyline = new kakao.maps.Polyline({ map, path, ...style });
       polylinesRef.current.push(polyline);
     });
@@ -328,12 +539,12 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
 
   // 카카오맵 초기화
   useEffect(() => {
-    if (!sdkLoaded || !mapContainerRef.current || !midpoint) return;
+    if (!sdkLoaded || !mapContainerRef.current || !currentMidpoint) return;
 
     const { kakao } = window;
     const center = new kakao.maps.LatLng(
-      midpoint.lat ?? 37.5665,
-      midpoint.lng ?? 126.978
+      currentMidpoint.lat ?? 37.5665,
+      currentMidpoint.lng ?? 126.978
     );
     const map = new kakao.maps.Map(mapContainerRef.current, { center, level: 6 });
     kakaoMapRef.current = map;
@@ -370,25 +581,44 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
     bounds.extend(center);
     map.setBounds(bounds, 60);
 
-    drawRoutes(map, departurePoints, midpoint, mode);
-  }, [sdkLoaded, midpoint]);
+    // 실제 경로 좌표 + 소요시간 fetch
+    const validDeps = departurePoints.filter(p => p.lat && p.lng);
+    Promise.all(
+      validDeps.map(dep =>
+        fetchRoute({ startLat: dep.lat, startLon: dep.lng, endLat: currentMidpoint.lat, endLon: currentMidpoint.lng, mode })
+          .catch(() => ({ coordinates: [], duration_mins: null, distance_km: null }))
+      )
+    ).then(results => {
+      const coordsList = results.map(r => r.coordinates ?? r);
+      const statsList  = results.map(r => ({ duration_mins: r.duration_mins, distance_km: r.distance_km }));
+      setRouteCoords(coordsList);
+      setRouteStats(statsList);
+      drawRoutes(map, validDeps, currentMidpoint, mode, coordsList);
+    });
+  }, [sdkLoaded, currentMidpoint]);
 
   // 이동수단 변경 시 경로 재렌더
   useEffect(() => {
-    if (!kakaoMapRef.current || !midpoint) return;
-    drawRoutes(kakaoMapRef.current, departurePoints, midpoint, mode);
-  }, [mode, drawRoutes]);
+    if (!kakaoMapRef.current || !currentMidpoint) return;
+    const validDeps = departurePoints.filter(p => p.lat && p.lng);
+    if (routeCoords.length > 0) {
+      drawRoutes(kakaoMapRef.current, validDeps, currentMidpoint, mode, routeCoords);
+    } else {
+      drawRoutes(kakaoMapRef.current, validDeps, currentMidpoint, mode);
+    }
+  }, [mode, drawRoutes, currentMidpoint, routeCoords]);
 
-  // 중간지점 근처 장소 검색
+  // 중간지점 근처 장소 검색 (API 결과 없을 때 카카오 fallback)
   useEffect(() => {
-    if (!sdkLoaded || !midpoint?.lat) return;
+    if (!sdkLoaded || !currentMidpoint?.lat) return;
+    if (initialApiResult?.recommended_places?.length) return; // API 결과 우선
     setLoadingPlaces(true);
     const catCode = filter === '전체' ? 'FD6' : (CATEGORY_MAP[filter] ?? 'FD6');
-    searchByCategory(catCode, midpoint.lat, midpoint.lng, 800)
+    searchByCategory(catCode, currentMidpoint.lat, currentMidpoint.lng, 800)
       .then(res => {
         if (res.length === 0) {
           if (filter === '전체') {
-            return searchByCategory('CE7', midpoint.lat, midpoint.lng, 800);
+            return searchByCategory('CE7', currentMidpoint.lat, currentMidpoint.lng, 800);
           }
           return [];
         }
@@ -397,31 +627,40 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
       .then(res => setPlaces(res.length > 0 ? res : MOCK_PLACES))
       .catch(() => setPlaces(MOCK_PLACES))
       .finally(() => setLoadingPlaces(false));
-  }, [sdkLoaded, midpoint, filter]);
+  }, [sdkLoaded, currentMidpoint, filter]);
 
   // 예상 소요시간 계산
-  const travelTimes = departurePoints.map(dep =>
-    dep.lat && midpoint?.lat
-      ? estimateTravelTime(calcDistance(dep.lat, dep.lng, midpoint.lat, midpoint.lng), mode)
-      : '–'
-  );
+  const modeForCalc = mode === 'driving' ? 'car' : mode === 'walking' ? 'walk' : mode;
+  const travelTimes = departurePoints.map((dep, i) => {
+    const actual = routeStats[i]?.duration_mins;
+    if (actual != null) {
+      const h = Math.floor(actual / 60);
+      const m = Math.round(actual % 60);
+      return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+    }
+    return dep.lat && currentMidpoint?.lat
+      ? estimateTravelTime(calcDistance(dep.lat, dep.lng, currentMidpoint.lat, currentMidpoint.lng), modeForCalc)
+      : '–';
+  });
 
   // 이동수단별 바 색상 — 대중교통은 호선 공식색, 자동차/도보는 고유색
   const modeBarColor = (() => {
     if (mode === 'car') return '#7EB8F7';
     if (mode === 'walk') return '#4CAF50';
-    return midpoint?.subwayRoute
-      ? (LINE_INFO[midpoint.subwayRoute.lineNumber]?.color ?? '#F08472')
+    return currentMidpoint?.subwayRoute
+      ? (LINE_INFO[currentMidpoint.subwayRoute.lineNumber]?.color ?? '#F08472')
       : '#F08472';
   })();
 
   // 분(숫자) 기준 소요시간 → 가장 긴 여정을 100%로 맞춰 비율 계산
-  const speeds = { transit: 10, car: 22, walk: 4.5 };
-  const travelMinsArr = departurePoints.map(dep =>
-    dep.lat && midpoint?.lat
-      ? (calcDistance(dep.lat, dep.lng, midpoint.lat, midpoint.lng) / speeds[mode]) * 60
-      : 0
-  );
+  const speeds = { transit: 10, driving: 22, walking: 4.5 };
+  const travelMinsArr = departurePoints.map((dep, i) => {
+    const actual = routeStats[i]?.duration_mins;
+    if (actual != null) return actual;
+    return dep.lat && currentMidpoint?.lat
+      ? (calcDistance(dep.lat, dep.lng, currentMidpoint.lat, currentMidpoint.lng) / speeds[mode]) * 60
+      : 0;
+  });
   const maxMins = Math.max(...travelMinsArr, 1);
 
   const filteredPlaces = places.filter(p => {
@@ -433,11 +672,11 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
     <div className="w-full h-full flex flex-col bg-white overflow-y-auto">
       {/* 지도 영역 */}
       <div className="flex-shrink-0 relative overflow-hidden" style={{ height: 200 }}>
-        {sdkLoaded && midpoint?.lat ? (
+        {sdkLoaded && currentMidpoint?.lat ? (
           <div ref={mapContainerRef} className="w-full h-full" />
         ) : (
           <>
-            <MockMapSVG departurePoints={departurePoints} midpoint={midpoint} mode={mode} />
+            <MockMapSVG departurePoints={departurePoints} midpoint={currentMidpoint} mode={mode} />
             <div className="absolute bottom-2 right-2 bg-black/40 text-white text-[9px] px-2 py-1 rounded-full">
               카카오 키 설정 시 실제 지도로 전환
             </div>
@@ -448,14 +687,21 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
       <div className="flex-1 overflow-y-auto">
         {/* ESTIMATED CENTER */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <div>
+          <div className="flex-1 min-w-0 mr-3">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">ESTIMATED CENTER</p>
-            <p className="text-lg font-bold text-gray-900">
-              {midAddress || midpoint?.address ||
-                (midpoint?.lat ? guessAreaFromCoords(midpoint.lat, midpoint.lng) : '계산 중...')}
+            <p className="text-lg font-bold text-gray-900 truncate">
+              {currentMidpoint?.snapped_station
+                ? `${currentMidpoint.snapped_station}역`
+                : midAddress || currentMidpoint?.address ||
+                  (currentMidpoint?.lat ? guessAreaFromCoords(currentMidpoint.lat, currentMidpoint.lng) : '계산 중...')}
             </p>
+            {summary && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                직선 {summary.direct_distance_km}km · 총 {summary.total_time_mins}분
+              </p>
+            )}
           </div>
-          <button onClick={handleShare} className="p-2 active:bg-gray-50 rounded-xl">
+          <button onClick={handleShare} className="p-2 active:bg-gray-50 rounded-xl flex-shrink-0">
             <ShareIcon />
           </button>
         </div>
@@ -465,15 +711,21 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
           {TRANSPORT_MODES.map(m => (
             <button
               key={m.id}
-              onClick={() => setMode(m.id)}
+              onClick={() => handleModeChange(m.id)}
+              disabled={apiLoading}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                 mode === m.id ? 'bg-[#FFF0ED] text-[#F08472] font-semibold' : 'text-gray-400'
-              }`}
+              } ${apiLoading ? 'opacity-50' : ''}`}
             >
               {m.icon(mode === m.id)}
               {m.label}
             </button>
           ))}
+          {apiLoading && (
+            <div className="ml-auto flex items-center">
+              <div className="w-4 h-4 border-2 border-gray-200 border-t-[#F08472] rounded-full animate-spin" />
+            </div>
+          )}
         </div>
 
         {/* 예상 소요 시간 */}
@@ -487,7 +739,10 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
                     <span className="text-[10px] text-gray-400 font-medium">{dep.isMyLocation ? '내 위치' : `출발지 ${i + 1}`} — {dep.label || '미입력'}</span>
                     <p className="text-sm font-semibold text-gray-800">{travelTimes[i]}</p>
                   </div>
-                  <button className="text-[10px] text-gray-400 border border-gray-200 rounded px-2 py-0.5 whitespace-nowrap">
+                  <button
+                    onClick={() => setRouteSheet(i)}
+                    className="text-[10px] text-[#F08472] border border-[#F08472]/40 rounded px-2 py-0.5 whitespace-nowrap active:bg-[#FFF0ED]"
+                  >
                     경로 자세히 보기 +
                   </button>
                 </div>
@@ -563,6 +818,44 @@ export default function ResultPage({ departurePoints, midpoint, onBack }) {
       </div>
 
       <BottomNav active="home" />
+
+      {/* 경로 상세 바텀시트 */}
+      {routeSheet !== null && (
+        <RouteDetailSheet
+          dep={departurePoints[routeSheet]}
+          midpoint={currentMidpoint}
+          mode={mode}
+          travelTime={travelTimes[routeSheet]}
+          distanceKm={travelMinsArr[routeSheet] * speeds[mode] / 60}
+          onClose={() => setRouteSheet(null)}
+        />
+      )}
+
+      {/* Case B: 도보 5km 초과 팝업 */}
+      {walkingPopup && (
+        <div className="absolute inset-0 z-50 flex items-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setWalkingPopup(false)} />
+          <div className="relative w-full bg-white rounded-t-3xl px-6 pt-6 pb-10 shadow-2xl">
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
+            <p className="text-base font-bold text-gray-900 mb-2">도보로 가기엔 먼 거리예요</p>
+            <p className="text-sm text-gray-500 leading-relaxed mb-6">
+              두 출발지의 직선 거리가 5km를 초과해서<br />도보 이동을 추천하지 않아요.<br />대중교통으로 변경할까요?
+            </p>
+            <button
+              onClick={() => { handleModeChange('transit'); setWalkingPopup(false); }}
+              className="w-full bg-[#F08472] text-white rounded-2xl py-3.5 font-semibold text-sm mb-2"
+            >
+              대중교통으로 변경하기
+            </button>
+            <button
+              onClick={() => setWalkingPopup(false)}
+              className="w-full text-gray-400 py-2 text-sm"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

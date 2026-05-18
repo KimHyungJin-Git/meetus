@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import BottomNav from '../components/BottomNav';
 import { reverseGeocode, searchKeyword } from '../services/kakaoApi';
-import { calcAverageMidpoint } from '../services/midpoint';
+import { calcAverageMidpoint, calcDistance } from '../services/midpoint';
 import { detectSubwayRoute } from '../services/subwayData';
+import { calculateMidpoint, reverseGeocodeFromServer, searchKeywordFromServer } from '../services/meetusApi';
 import useKakaoLoader from '../hooks/useKakaoLoader';
 
 const MAX_POINTS = 5;
@@ -61,10 +62,12 @@ function LocationSheet({ isFirstRow, onSelect, onClose, sdkLoaded }) {
   const handleQueryChange = (val) => {
     setQuery(val);
     clearTimeout(debounceRef.current);
-    if (!val.trim() || !sdkLoaded) { setResults([]); return; }
+    if (!val.trim()) { setResults([]); return; }
     debounceRef.current = setTimeout(async () => {
       try {
-        const res = await searchKeyword(val);
+        const res = sdkLoaded
+          ? await searchKeyword(val)
+          : await searchKeywordFromServer(val);
         setResults(res.slice(0, 6));
       } catch { setResults([]); }
     }, 350);
@@ -78,12 +81,16 @@ function LocationSheet({ isFirstRow, onSelect, onClose, sdkLoaded }) {
       async (pos) => {
         const { latitude: lat, longitude: lng } = pos.coords;
         try {
-          const address = sdkLoaded
-            ? await reverseGeocode(lat, lng)
-            : `위도 ${lat.toFixed(4)}, 경도 ${lng.toFixed(4)}`;
-          onSelect({ label: address, lat, lng, isMyLocation: true });
+          let address = '';
+          if (sdkLoaded) {
+            address = await reverseGeocode(lat, lng);
+          }
+          if (!address) {
+            address = await reverseGeocodeFromServer(lat, lng);
+          }
+          onSelect({ label: address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng, isMyLocation: true });
         } catch {
-          onSelect({ label: `위도 ${lat.toFixed(4)}, 경도 ${lng.toFixed(4)}`, lat, lng, isMyLocation: true });
+          onSelect({ label: `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng, isMyLocation: true });
         } finally {
           setGpsFetching(false);
         }
@@ -135,9 +142,6 @@ function LocationSheet({ isFirstRow, onSelect, onClose, sdkLoaded }) {
         {gpsError && <p className="text-xs text-red-400 mb-2 px-1">{gpsError}</p>}
 
         {/* 검색 결과 */}
-        {!sdkLoaded && query && (
-          <p className="text-xs text-gray-400 text-center py-4">카카오 API 키 설정 후 주소 검색이 활성화돼요.<br />.env에 VITE_KAKAO_APP_KEY를 입력해주세요.</p>
-        )}
         <div className="overflow-y-auto flex-1">
           {results.map(item => (
             <button
@@ -149,21 +153,12 @@ function LocationSheet({ isFirstRow, onSelect, onClose, sdkLoaded }) {
               <p className="text-xs text-gray-400 mt-0.5">{item.address}</p>
             </button>
           ))}
-          {/* 검색 결과 없을 때 직접 입력 옵션 */}
-          {sdkLoaded && query && results.length === 0 && (
+          {query && results.length === 0 && (
             <button
               onClick={() => onSelect({ label: query, lat: null, lng: null, isMyLocation: false })}
               className="w-full text-left px-2 py-3 active:bg-gray-50"
             >
               <p className="text-sm text-gray-500">"{query}" 직접 입력</p>
-            </button>
-          )}
-          {!sdkLoaded && !query && (
-            <button
-              onClick={() => onSelect({ label: query || '직접 입력된 위치', lat: null, lng: null, isMyLocation: false })}
-              className="w-full text-left px-2 py-3"
-            >
-              <p className="text-sm text-gray-400">이름만 입력하기 (좌표 없음)</p>
             </button>
           )}
         </div>
@@ -172,17 +167,30 @@ function LocationSheet({ isFirstRow, onSelect, onClose, sdkLoaded }) {
   );
 }
 
+const TRANSPORT_OPTIONS = [
+  { id: 'transit',  label: '대중교통' },
+  { id: 'driving',  label: '자동차' },
+  { id: 'walking',  label: '도보' },
+];
+const CATEGORY_OPTIONS = [
+  { code: 'CE7', label: '카페' },
+  { code: 'FD6', label: '식당' },
+];
+
 // ── 메인 페이지 ────────────────────────────────────────────────
 export default function MainPage({ onCalculate }) {
   const { loaded: sdkLoaded } = useKakaoLoader();
 
-  // ── 테스트 데이터: 삼성역(2호선) / 건대입구역(2호선) ──────────
   const [points, setPoints] = useState([
-    { id: 1, label: '삼성역', lat: 37.508595, lng: 127.063120, isMyLocation: true },
-    { id: 2, label: '건대입구역', lat: 37.540309, lng: 127.069510, isMyLocation: false },
+    { id: 1, label: '', lat: null, lng: null, isMyLocation: false },
+    { id: 2, label: '', lat: null, lng: null, isMyLocation: false },
   ]);
-  const [activeSheet, setActiveSheet] = useState(null); // index of row being edited
+  const [activeSheet, setActiveSheet] = useState(null);
   const [calculating, setCalculating] = useState(false);
+  const [mode, setMode] = useState('transit');
+  const [category, setCategory] = useState('CE7');
+  const [walkingPopup, setWalkingPopup] = useState(false);
+  const [apiError, setApiError] = useState('');
 
   const openSheet = (idx) => { if (!calculating) setActiveSheet(idx); };
   const closeSheet = () => setActiveSheet(null);
@@ -203,23 +211,69 @@ export default function MainPage({ onCalculate }) {
     setPoints(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const handleCalculate = () => {
+  const handleCalculate = async () => {
     const filled = points.filter(p => p.label);
     if (filled.length < 2) return;
     setCalculating(true);
-    setTimeout(() => {
-      const subwayRoute = detectSubwayRoute(filled);
-      const mid = subwayRoute
-        ? {
-            lat: subwayRoute.meetingStation.lat,
-            lng: subwayRoute.meetingStation.lng,
-            address: subwayRoute.meetingStation.name,
-            subwayRoute,
-          }
-        : (calcAverageMidpoint(filled) ?? { lat: 37.5665, lng: 126.978, address: '서울 시청 인근' });
-      setCalculating(false);
-      onCalculate(filled, mid);
-    }, 2200);
+    setApiError('');
+
+    // 좌표가 있는 첫 두 지점으로 API 호출
+    const withCoords = filled.filter(p => p.lat && p.lng);
+    const [pointA, pointB] = withCoords;
+
+    if (pointA && pointB) {
+      try {
+        const result = await calculateMidpoint({
+          startLat: pointA.lat,
+          startLon: pointA.lng,
+          endLat: pointB.lat,
+          endLon: pointB.lng,
+          mode,
+          category,
+        });
+
+        setCalculating(false);
+
+        // Case B: 도보 + 5km 초과
+        if (result.status === 'filtered') {
+          setWalkingPopup(true);
+          return;
+        }
+
+        // Case C: 파라미터 오류
+        if (result.status === 'error') {
+          setApiError(result.message || '요청 오류가 발생했습니다.');
+          return;
+        }
+
+        // Case A: 성공
+        if (result.status === 'success') {
+          const mid = {
+            lat: result.midpoint_geo.lat,
+            lng: result.midpoint_geo.lng,
+            address: result.midpoint_geo.address,
+            snapped_station: result.midpoint_geo.snapped_station,
+          };
+          onCalculate(filled, mid, result);
+          return;
+        }
+      } catch {
+        // 백엔드 미연결 시 기존 클라이언트 계산으로 fallback
+      }
+    }
+
+    // Fallback: 기존 로직
+    const subwayRoute = detectSubwayRoute(filled);
+    const mid = subwayRoute
+      ? {
+          lat: subwayRoute.meetingStation.lat,
+          lng: subwayRoute.meetingStation.lng,
+          address: subwayRoute.meetingStation.name,
+          subwayRoute,
+        }
+      : (calcAverageMidpoint(filled) ?? { lat: 37.5665, lng: 126.978, address: '서울 시청 인근' });
+    setCalculating(false);
+    onCalculate(filled, mid, null);
   };
 
   const canCalculate = points.filter(p => p.label).length >= 2;
@@ -296,6 +350,53 @@ export default function MainPage({ onCalculate }) {
         )}
       </div>
 
+      {/* 이동수단 선택 */}
+      <div className="mx-4 mt-3">
+        <p className="text-xs font-semibold text-gray-500 mb-2 px-1">이동수단</p>
+        <div className="flex gap-2">
+          {TRANSPORT_OPTIONS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => { setMode(t.id); setApiError(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                mode === t.id
+                  ? 'bg-[#F08472] text-white'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 장소 유형 선택 */}
+      <div className="mx-4 mt-3">
+        <p className="text-xs font-semibold text-gray-500 mb-2 px-1">만날 장소 유형</p>
+        <div className="flex gap-2">
+          {CATEGORY_OPTIONS.map(c => (
+            <button
+              key={c.code}
+              onClick={() => setCategory(c.code)}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                category === c.code
+                  ? 'bg-gray-800 text-white'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* API 오류 메시지 */}
+      {apiError && (
+        <div className="mx-4 mt-2 px-4 py-2 bg-red-50 rounded-xl">
+          <p className="text-xs text-red-500">{apiError}</p>
+        </div>
+      )}
+
       {/* 계산하기 버튼 */}
       <div className="px-4 pt-4 pb-2">
         <button
@@ -311,6 +412,32 @@ export default function MainPage({ onCalculate }) {
 
       <div className="flex-1" />
       <BottomNav active="home" />
+
+      {/* Case B: 도보 5km 초과 팝업 */}
+      {walkingPopup && (
+        <div className="absolute inset-0 z-50 flex items-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setWalkingPopup(false)} />
+          <div className="relative w-full bg-white rounded-t-3xl px-6 pt-6 pb-10 shadow-2xl">
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
+            <p className="text-base font-bold text-gray-900 mb-2">도보로 가기엔 먼 거리예요</p>
+            <p className="text-sm text-gray-500 leading-relaxed mb-6">
+              두 출발지의 직선 거리가 5km를 초과해서<br />도보 이동을 추천하지 않아요.<br />대중교통으로 변경할까요?
+            </p>
+            <button
+              onClick={() => { setMode('transit'); setWalkingPopup(false); }}
+              className="w-full bg-[#F08472] text-white rounded-2xl py-3.5 font-semibold text-sm mb-2"
+            >
+              대중교통으로 변경하기
+            </button>
+            <button
+              onClick={() => setWalkingPopup(false)}
+              className="w-full text-gray-400 py-2 text-sm"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 위치 선택 바텀시트 */}
       {activeSheet !== null && (
